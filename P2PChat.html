@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Chat</title>
+    <style>
+        body{font-family:Arial,sans-serif;max-width:1200px;margin:0 auto;padding:20px;background:black;color:#e0e0e0;}
+        .container{display:flex;gap:20px;height:80vh;}
+        .sidebar{width:300px;background:#1a1a1a;border-radius:10px;padding:20px;box-shadow:0 2px 10px rgba(128,0,128,0.3);overflow-y:auto;}
+        .chatbox{flex:1;background:#1a1a1a;border-radius:10px;padding:20px;box-shadow:0 2px 10px rgba(128,0,128,0.3);display:flex;flex-direction:column;}
+        #messages{flex:1;overflow-y:auto;border:1px solid #4a0e4e;padding:10px;border-radius:5px;margin-bottom:10px;background:#0a0a0a;color:white;}
+        .msg{margin:5px 0;padding:8px;border-radius:5px;}
+        .me{background:#4a0e4e;color:white;margin-left:20%;}
+        .them{background:#2a0e2a;color:white;margin-right:20%;}
+        input,textarea,button{width:100%;padding:10px;margin:5px 0;border:1px solid #4a0e4e;border-radius:5px;box-sizing:border-box;background:#1a1a1a;color:white;}
+        button{background:#4a0e4e;color:white;border:none;cursor:pointer;font-weight:bold;}
+        button:hover{background:#6a0572;}
+        button:disabled{background:#333;cursor:not-allowed;}
+        #token,#answerToken{font-family:monospace;background:#0a0a0a;min-height:50px;}
+        .status{text-align:center;padding:10px;border-radius:5px;margin:10px 0;background:#1a1a1a;color:white;}
+        .connecting{background:#4a0e4e;}.connected{background:#2a6f4b;}.error{background:#6a0e4e;}
+        #files{max-height:150px;overflow-y:auto;border:1px solid #4a0e4e;padding:10px;border-radius:5px;background:#0a0a0a;color:white;}
+        #hostControls{display:none;background:#2a0e2a;padding:10px;border-radius:5px;margin:10px 0;}
+        h3{color:#e0e0e0;}
+        .instr{font-size:0.9em;color:#ccc;margin-bottom:20px;}
+    </style>
+</head>
+<body>
+    <h1>🔗 P2P Chat (Token + Encrypt + TURN)</h1>
+    <div class="instr">
+        1. Host: Create Token → Send base64.<br>
+        2. Client: Paste → Connect → Send YOUR token.<br>
+        3. Host: Paste answer → Apply.<br>
+        4. Both: SAME passphrase → Chat/files P2P!
+    </div>
+    <div class="container">
+        <div class="sidebar">
+            <h3>Connection</h3>
+            <button id="createOffer">Create Token</button>
+            <textarea id="token" placeholder="Paste token here"></textarea>
+            <input type="password" id="passphrase" placeholder="Passphrase (encrypt)">
+            <div id="hostControls">
+                <textarea id="answerToken" placeholder="Paste answer"></textarea>
+                <button id="applyAnswerBtn">Apply</button>
+            </div>
+            <input type="file" id="fileInput" accept="image/*,.pdf,.txt" multiple>
+            <button id="connectBtn">Connect</button>
+            <button id="disconnectBtn">Disconnect</button>
+            <div id="status" class="status">Ready</div>
+            <div id="files"></div>
+        </div>
+        <div class="chatbox">
+            <div id="messages"></div>
+            <input type="text" id="messageInput" placeholder="Msg (Enter send)" maxlength="500">
+            <button id="sendBtn" disabled>Send</button>
+        </div>
+    </div>
+    <script>
+        let pc, dc, pw='', msgs=[]; 
+        const config={iceServers:[{urls:'stun:stun.cloudflare.com:3478'},{urls:'turn:turn.cloudflare.com:3478?transport=udp',username:'g0a3cdba666331faa8c764cbfe01420e550c0778b6e74247b69275cae2429844',credential:'openrelayproject'},{urls:'turn:turn.cloudflare.com:3478?transport=tcp',username:'g0a3cdba666331faa8c764cbfe01420e550c0778b6e74247b69275cae2429844',credential:'622a3f4e6e2d6982c5afb2f408f43b54308729cce5b1408ac6a94d7e9fcee7aa'}]};
+        
+        const ui = {
+            token: document.getElementById('token'),
+            answerToken: document.getElementById('answerToken'),
+            passphrase: document.getElementById('passphrase'),
+            status: document.getElementById('status'),
+            messages: document.getElementById('messages'),
+            messageInput: document.getElementById('messageInput'),
+            sendBtn: document.getElementById('sendBtn'),
+            connectBtn: document.getElementById('connectBtn'),
+            createOffer: document.getElementById('createOffer'),
+            applyAnswerBtn: document.getElementById('applyAnswerBtn'),
+            fileInput: document.getElementById('fileInput'),
+            hostControls: document.getElementById('hostControls'),
+            files: document.getElementById('files'),
+            disconnectBtn: document.getElementById('disconnectBtn')
+        };
+
+        function disconnect() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (dc) {
+                dc.close();
+                dc = null;
+            }
+            updateStatus('Disconnected', 'error');
+            ui.hostControls.style.display = 'none';
+            ui.sendBtn.disabled = true;
+            ui.token.value = '';
+            ui.answerToken.value = '';
+            ui.passphrase.value = '';
+            pw = '';
+            msgs = [];
+            ui.messages.innerHTML = '';
+        }
+
+        function updateStatus(m, c) {
+            ui.status.textContent = m;
+            ui.status.className = `status ${c}`;
+            console.log(m);
+        }
+
+        function clean(t) {
+            let c = t.replace(/[^A-Za-z0-9+/=]/g, '');
+            while (c.length % 4 !== 0) c += '=';
+            return c;
+        }
+
+        function checkReady() {
+            ui.sendBtn.disabled = !(dc?.readyState === 'open' && pw);
+        }
+
+        function setupPC(p) {
+            p.onconnectionstatechange = () => {
+                let s = p.connectionState;
+                if (s === 'connected') updateStatus('🟢 Connected!', 'connected');
+                else if (s === 'failed') updateStatus('❌ Failed', 'error');
+            };
+            p.oniceconnectionstatechange = () => {
+                if (p.iceConnectionState === 'failed') updateStatus('ICE failed - retry', 'error');
+            };
+        }
+
+        async function createOffer() {
+            try {
+                if (pc) pc.close();
+                pc = new RTCPeerConnection(config);
+                setupPC(pc);
+                dc = pc.createDataChannel('chat', { negotiated: true, id: 0 });
+                setupDC(dc);
+                ui.token.value = '';
+                updateStatus('Creating...', 'connecting');
+                ui.hostControls.style.display = 'block';
+                pc.onicecandidate = e => {
+                    if (!e.candidate) {
+                        ui.token.value = btoa(JSON.stringify(pc.localDescription));
+                        updateStatus('Copy token!', 'connecting');
+                    }
+                };
+                let o = await pc.createOffer();
+                await pc.setLocalDescription(o);
+            } catch (e) {
+                updateStatus(e.message, 'error');
+            }
+        }
+
+        async function connectPeer() {
+            try {
+                let t = clean(ui.token.value);
+                if (!t) return updateStatus('Paste token!', 'error');
+                let d = JSON.parse(atob(t));
+                if (pc) pc.close();
+                pc = new RTCPeerConnection(config);
+                setupPC(pc);
+                await pc.setRemoteDescription(d);
+                dc = pc.createDataChannel('chat', { negotiated: true, id: 0 });
+                setupDC(dc);
+                pc.onicecandidate = e => {
+                    if (!e.candidate) {
+                        ui.token.value = btoa(JSON.stringify(pc.localDescription));
+                        updateStatus('Copy answer token!', 'connecting');
+                    }
+                };
+                let a = await pc.createAnswer();
+                await pc.setLocalDescription(a);
+            } catch (e) {
+                updateStatus(e.message, 'error');
+            }
+        }
+
+        async function applyAnswer() {
+            try {
+                let t = clean(ui.answerToken.value);
+                if (!t) return updateStatus('Paste answer!', 'error');
+                let d = JSON.parse(atob(t));
+                await pc.setRemoteDescription(d);
+                checkReady();
+            } catch (e) {
+                updateStatus(e.message, 'error');
+            }
+        }
+
+        function setupDC(ch) {
+            ch.onopen = () => {
+                checkReady();
+                updateStatus('Data channel open', 'connected');
+            };
+            ch.onmessage = async e => {
+                try {
+                    let data = JSON.parse(e.data), msg = data.msg;
+                    if (data.encrypted && pw) msg = await decrypt(data.msg, pw);
+                    addMsg(msg || 'File rcvd', false, data.type || 'text');
+                    if (data.file) rcvFile(data.file);
+                } catch {
+                    addMsg('Invalid message', false, 'error');
+                }
+            };
+            ch.onclose = () => updateStatus('Channel Closed', 'error');
+        }
+
+        async function send() {
+            let m = ui.messageInput.value.trim();
+            
+            if (!m) {
+                updateStatus('Message is empty', 'error');
+                return;
+            }
+            
+            if (!dc || dc.readyState !== 'open') {
+                updateStatus('Connection not established', 'error');
+                return;
+            }
+            
+            if (!pw) {
+                updateStatus('Enter passphrase', 'error');
+                return;
+            }
+
+            try {
+                let enc = await encrypt(m, pw);
+                dc.send(JSON.stringify({msg: enc, type: 'text', encrypted: true}));
+                addMsg(m, true, 'text');
+                ui.messageInput.value = '';
+            } catch (error) {
+                updateStatus('Send failed: ' + error.message, 'error');
+                console.error(error);
+            }
+        }
+
+        function handleFiles() {
+            Array.from(ui.fileInput.files).forEach(f => {
+                let r = new FileReader();
+                r.onload = () => {
+                    let buf = r.result, b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                    if (dc?.readyState === 'open') {
+                        dc.send(JSON.stringify({ file: { name: f.name, data: b64, type: f.type }, type: 'file' }));
+                        addMsg(`Sending ${f.name}`, true, 'file');
+                    }
+                };
+                r.readAsArrayBuffer(f);
+            });
+            ui.fileInput.value = '';
+        }
+
+        function rcvFile(fd) {
+            try {
+                let bytes = Uint8Array.from(atob(fd.data), c => c.charCodeAt(0));
+                let blob = new Blob([bytes], { type: fd.type });
+                let url = URL.createObjectURL(blob);
+                let a = document.createElement('a');
+                a.href = url;
+                a.download = fd.name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                addMsg(`Downloaded ${fd.name}`, false, 'file');
+            } catch (e) {
+                addMsg(`File fail: ${fd.name}`, false, 'error');
+            }
+        }
+
+        function addMsg(t, me, type = 'text') {
+            msgs.push({ t, me, type });
+            let d = document.createElement('div');
+            d.className = `msg ${me ? 'me' : 'them'} ${type}`;
+            d.innerHTML = `<strong>${me ? 'You' : 'Friend'}</strong>: ${t}`;
+            ui.messages.appendChild(d);
+            ui.messages.scrollTop = ui.messages.scrollHeight;
+        }
+
+        async function encrypt(t, p) {
+            let e = new TextEncoder(),
+                km = await crypto.subtle.importKey('raw', e.encode(p), 'PBKDF2', false, ['deriveKey']),
+                s = crypto.getRandomValues(new Uint8Array(16)),
+                iv = crypto.getRandomValues(new Uint8Array(12)),
+                k = await crypto.subtle.deriveKey({
+                    name: 'PBKDF2',
+                    salt: s,
+                    iterations: 100000,
+                    hash: 'SHA-256'
+                }, km, { name: 'AES-GCM', length: 256 }, true, ['encrypt']),
+                ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, e.encode(t)),
+                c = new Uint8Array(s.length + iv.length + ct.byteLength);
+            c.set(s, 0);
+            c.set(iv, s.length);
+            c.set(new Uint8Array(ct), s.length + iv.length);
+            return btoa(String.fromCharCode(...c));
+        }
+
+        async function decrypt(b, p) {
+            let d = new TextDecoder(),
+                c = Uint8Array.from(atob(b), x => x.charCodeAt(0)),
+                s = c.slice(0, 16),
+                iv = c.slice(16, 28),
+                data = c.slice(28),
+                e = new TextEncoder(),
+                km = await crypto.subtle.importKey('raw', e.encode(p), 'PBKDF2', false, ['deriveKey']),
+                k = await crypto.subtle.deriveKey({
+                    name: 'PBKDF2',
+                    salt: s,
+                    iterations: 100000,
+                    hash: 'SHA-256'
+                }, km, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+            return d.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k, data));
+        }
+
+        ui.createOffer.onclick = createOffer;
+        ui.connectBtn.onclick = connectPeer;
+        ui.applyAnswerBtn.onclick = applyAnswer;
+        ui.sendBtn.onclick = send;
+        ui.messageInput.onkeypress = e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                send();
+            }
+        };
+        ui.fileInput.onchange = handleFiles;
+        ui.passphrase.oninput = e => { pw = e.target.value; checkReady(); };
+        ui.disconnectBtn.onclick = disconnect;
+    </script>
+</body>
+</html>
+
