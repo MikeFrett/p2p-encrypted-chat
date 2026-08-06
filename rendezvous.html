@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rendezvous</title>
+<style>
+  :root{
+    --bg:#0b0e14;
+    --panel:#11151f;
+    --line:#232a3a;
+    --text:#dbe2f0;
+    --muted:#7c869c;
+    --amber:#ffb84d;
+    --amber-dim:#8a6626;
+    --teal:#3ddcc4;
+    --red:#ff6b6b;
+  }
+  *{box-sizing:border-box;}
+  @media (prefers-reduced-motion: reduce){ *{animation:none !important; transition:none !important;} }
+  body{
+    margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .card{
+    width:100%; max-width:820px; background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; padding:48px 44px; box-shadow:0 20px 60px rgba(0,0,0,.5);
+  }
+  .eyebrow{
+    font-family:'Consolas','Courier New',monospace; letter-spacing:.18em; text-transform:uppercase;
+    font-size:11px; color:var(--muted); margin:0 0 6px;
+  }
+  h1{ margin:0 0 8px; font-size:38px; font-weight:700; letter-spacing:-.01em; }
+  .sub{ color:var(--muted); font-size:18px; margin:0 0 32px; line-height:1.5; }
+
+  /* ---- signal beacon (signature element) ---- */
+  .beacon{ display:flex; align-items:center; justify-content:center; margin:4px 0 26px; }
+  .beacon svg{ width:64px; height:64px; }
+  .beacon .ring{ fill:none; stroke:var(--amber-dim); stroke-width:2; opacity:0; transform-origin:center; }
+  .beacon.searching .ring{ animation:pulse 2.2s ease-out infinite; }
+  .beacon.searching .ring.r2{ animation-delay:.7s; }
+  .beacon.searching .ring.r3{ animation-delay:1.4s; }
+  .beacon .dot{ fill:var(--amber); }
+  .beacon.connected .dot{ fill:var(--teal); }
+  .beacon.connected .ring{ display:none; }
+  .beacon.error .dot{ fill:var(--red); }
+  @keyframes pulse{
+    0%{ transform:scale(.3); opacity:.9; }
+    100%{ transform:scale(1); opacity:0; }
+  }
+
+  label{ display:block; font-size:12px; color:var(--muted); margin:0 0 6px; letter-spacing:.03em; }
+  input[type=text], input[type=password]{
+    width:100%; padding:18px 20px; font-size:28px; letter-spacing:.04em;
+    background:#0a0d14; border:1px solid var(--line); border-radius:9px; color:var(--text);
+    font-family:'Consolas','Courier New',monospace;
+  }
+  input::placeholder{ color:#4a5268; letter-spacing:normal; font-family:inherit; }
+  input:focus{ outline:none; border-color:var(--amber-dim); }
+
+  .row{ margin-bottom:16px; }
+  button{
+    width:100%; padding:20px; margin-top:8px; font-size:20px; font-weight:600;
+    background:var(--amber); color:#1a1204; border:none; border-radius:9px; cursor:pointer;
+  }
+  button:hover{ background:#ffc86b; }
+  button:disabled{ background:#2a3040; color:var(--muted); cursor:not-allowed; }
+  button.secondary{ background:transparent; color:var(--muted); border:1px solid var(--line); font-weight:500; }
+  button.secondary:hover{ background:#161b28; color:var(--text); }
+
+  .status{
+    margin-top:18px; padding:12px 14px; border-radius:9px; font-size:13px;
+    background:#0a0d14; border:1px solid var(--line); color:var(--muted);
+    display:flex; align-items:center; gap:8px;
+  }
+  .status .led{ width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
+  .status.ok .led{ background:var(--teal); }
+  .status.ok{ color:var(--teal); border-color:#1c4a41; }
+  .status.bad .led{ background:var(--red); }
+  .status.bad{ color:var(--red); border-color:#4a1c1c; }
+  .status.busy .led{ background:var(--amber); animation:blink 1s ease-in-out infinite; }
+  @keyframes blink{ 50%{ opacity:.3; } }
+
+  /* ---- chat view ---- */
+  .chat{ display:none; }
+  .chat.active{ display:block; }
+  .setup.hidden{ display:none; }
+  #log{
+    height:420px; overflow-y:auto; background:#0a0d14; border:1px solid var(--line);
+    border-radius:9px; padding:18px; margin-bottom:14px; font-size:20px;
+  }
+  .bubble{ max-width:80%; padding:14px 18px; border-radius:10px; margin:10px 0; line-height:1.5; word-wrap:break-word; }
+  .me{ background:var(--amber-dim); color:#fff0d6; margin-left:auto; }
+  .them{ background:#1c2130; color:var(--text); margin-right:auto; }
+  .sysline{ text-align:center; color:var(--muted); font-size:14px; margin:10px 0; font-family:'Consolas','Courier New',monospace; }
+  .composer{ display:flex; gap:8px; }
+  .composer input{ flex:1; font-size:20px; padding:16px 18px; font-family:inherit; letter-spacing:normal; }
+  .composer button{ width:auto; padding:0 26px; margin:0; }
+  .filebar{ display:flex; justify-content:space-between; align-items:center; margin:10px 0; }
+  .filebar label{ margin:0; color:var(--muted); font-size:14px; cursor:pointer; }
+  .filebar input[type=file]{ display:none; }
+  .end{ background:transparent; color:var(--red); border:1px solid #4a1c1c; margin-top:12px; }
+  .end:hover{ background:#1c0e0e; }
+
+  /* ---- inline image bubbles ---- */
+  .imgbubble{ position:relative; max-width:70%; padding:6px; }
+  .imgbubble img{ display:block; width:100%; max-height:320px; object-fit:contain; border-radius:8px; background:#000; }
+  .imgbubble .savebtn{
+    position:absolute; top:14px; right:14px; width:auto; margin:0; padding:8px 14px;
+    font-size:13px; border-radius:6px; opacity:0; transition:opacity .15s;
+    background:rgba(10,13,20,.85); color:var(--text); border:1px solid var(--line);
+  }
+  .imgbubble:hover .savebtn, .imgbubble:focus-within .savebtn{ opacity:1; }
+
+  /* ---- disconnect banner ---- */
+  .banner{
+    display:none; align-items:center; gap:10px; background:#241313; border:1px solid #4a1c1c;
+    color:var(--red); padding:12px 16px; border-radius:9px; margin-bottom:14px; font-size:15px;
+  }
+  .banner.show{ display:flex; }
+</style>
+</head>
+<body>
+
+<div class="card">
+
+  <div class="setup" id="setupView">
+    <p class="eyebrow">Rendezvous</p>
+    <h1>Find each other</h1>
+    <p class="sub">Both of you: enter the same word or PIN and press Connect at the time you agreed on. No codes to copy, nothing to install.</p>
+
+    <div class="beacon searching" id="beacon">
+      <svg viewBox="0 0 64 64">
+        <circle class="ring r1" cx="32" cy="32" r="10"/>
+        <circle class="ring r2" cx="32" cy="32" r="10"/>
+        <circle class="ring r3" cx="32" cy="32" r="10"/>
+        <circle class="dot" cx="32" cy="32" r="6"/>
+      </svg>
+    </div>
+
+    <div class="row">
+      <label for="pin">Shared word or PIN</label>
+      <input type="password" id="pin" placeholder="only the two of you know this" autocomplete="off">
+    </div>
+
+    <button id="connectBtn">Connect</button>
+    <button class="secondary" id="showPinBtn" type="button">Show what I typed</button>
+
+    <div class="status busy" id="status"><span class="led"></span><span id="statusText">Ready when you are.</span></div>
+  </div>
+
+  <div class="chat" id="chatView">
+    <p class="eyebrow" id="chatEyebrow">Rendezvous</p>
+    <h1 style="font-size:20px;margin-bottom:14px;">Connected</h1>
+    <div class="banner" id="disconnectBanner">⚠ Your friend disconnected. You can't send messages until you reconnect.</div>
+    <div id="log"></div>
+    <div class="filebar">
+      <label for="fileInput">📎 Send a file</label>
+      <input type="file" id="fileInput">
+      <span class="sub" style="margin:0;" id="fileNote"></span>
+    </div>
+    <div class="composer">
+      <input type="text" id="msgInput" placeholder="Type a message" maxlength="1000">
+      <button id="sendBtn">Send</button>
+    </div>
+    <button class="end" id="endBtn">End conversation</button>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+(function(){
+  const iceServers = [
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'turn:turn.cloudflare.com:3478?transport=udp', username:'g0a3cdba666331faa8c764cbfe01420e550c0778b6e74247b69275cae2429844', credential:'openrelayproject' },
+    { urls: 'turn:turn.cloudflare.com:3478?transport=tcp', username:'g0a3cdba666331faa8c764cbfe01420e550c0778b6e74247b69275cae2429844', credential:'622a3f4e6e2d6982c5afb2f408f43b54308729cce5b1408ac6a94d7e9fcee7aa' }
+  ];
+
+  const $ = id => document.getElementById(id);
+  const setupView = $('setupView'), chatView = $('chatView'), beacon = $('beacon');
+  const statusBox = $('status'), statusText = $('statusText');
+  const pinField = $('pin'), showPinBtn = $('showPinBtn'), connectBtn = $('connectBtn');
+  const log = $('log'), msgInput = $('msgInput'), sendBtn = $('sendBtn'), endBtn = $('endBtn');
+  const fileInput = $('fileInput'), fileNote = $('fileNote'), banner = $('disconnectBanner');
+
+  let peer = null, conn = null, pin = '', retried = false;
+  let heartbeatTimer = null, watchdogTimer = null, lastSeen = 0;
+
+  showPinBtn.onclick = () => {
+    pinField.type = pinField.type === 'password' ? 'text' : 'password';
+    showPinBtn.textContent = pinField.type === 'password' ? 'Show what I typed' : 'Hide it again';
+  };
+
+  function setStatus(text, kind){
+    statusText.textContent = text;
+    statusBox.className = 'status ' + (kind || 'busy');
+  }
+  function setBeacon(state){ beacon.className = 'beacon ' + state; }
+
+  // Deterministic room id from the PIN, without ever exposing the PIN itself.
+  async function roomIdFromPin(p){
+    const bytes = new TextEncoder().encode('rendezvous-room::' + p);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,'0')).join('');
+    return 'rv-' + hex.slice(0, 24);
+  }
+
+  connectBtn.onclick = async () => {
+    pin = pinField.value.trim();
+    if (!pin){ setStatus('Type your shared word or PIN first.', 'bad'); return; }
+    connectBtn.disabled = true;
+    retried = false;
+    setStatus('Listening for your friend…', 'busy');
+    startAsHost();
+  };
+
+  async function startAsHost(){
+    const id = await roomIdFromPin(pin);
+    if (peer) try{ peer.destroy(); }catch(e){}
+    peer = new Peer(id, { config: { iceServers } });
+
+    peer.on('open', () => {
+      setStatus('Waiting for your friend to connect…', 'busy');
+    });
+    peer.on('connection', c => {
+      conn = c;
+      wireConnection();
+    });
+    peer.on('error', err => {
+      if (err.type === 'unavailable-id' && !retried){
+        retried = true;
+        startAsClient(id);
+      } else if (err.type === 'peer-unavailable') {
+        // ignore, can happen transiently
+      } else {
+        setStatus('Connection trouble: ' + err.type + '. Try again.', 'bad');
+        setBeacon('error');
+        connectBtn.disabled = false;
+      }
+    });
+  }
+
+  function startAsClient(id){
+    if (peer) try{ peer.destroy(); }catch(e){}
+    peer = new Peer(undefined, { config: { iceServers } });
+    peer.on('open', () => {
+      setStatus('Found your friend, connecting…', 'busy');
+      conn = peer.connect(id, { reliable: true });
+      wireConnection();
+    });
+    peer.on('error', err => {
+      setStatus('Connection trouble: ' + err.type + '. Try again.', 'bad');
+      setBeacon('error');
+      connectBtn.disabled = false;
+    });
+  }
+
+  function wireConnection(){
+    conn.on('open', () => {
+      setStatus('Connected', 'ok');
+      setBeacon('connected');
+      setupView.classList.add('hidden');
+      chatView.classList.add('active');
+      sysline('You are connected, end to end.');
+      startHeartbeat();
+    });
+    conn.on('data', async data => {
+      lastSeen = Date.now();
+      try{
+        if (data.type === 'ping'){
+          // presence only, nothing to render
+        } else if (data.type === 'text'){
+          const plain = data.encrypted ? await decrypt(data.msg, pin) : data.msg;
+          addBubble(plain, false);
+        } else if (data.type === 'file'){
+          await receiveFile(data);
+        }
+      }catch(e){
+        sysline('Could not read that message.');
+      }
+    });
+    conn.on('close', handleDisconnect);
+    conn.on('error', handleDisconnect);
+  }
+
+  function startHeartbeat(){
+    lastSeen = Date.now();
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (conn && conn.open){ try{ conn.send({ type:'ping' }); }catch(e){} }
+    }, 4000);
+    watchdogTimer = setInterval(() => {
+      if (conn && conn.open && Date.now() - lastSeen > 12000){
+        handleDisconnect();
+      }
+    }, 3000);
+  }
+  function stopHeartbeat(){
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    heartbeatTimer = null; watchdogTimer = null;
+  }
+
+  let disconnected = false;
+  function handleDisconnect(){
+    if (disconnected) return;
+    disconnected = true;
+    stopHeartbeat();
+    banner.classList.add('show');
+    msgInput.disabled = true;
+    sendBtn.disabled = true;
+    fileInput.disabled = true;
+    sysline('Connection lost.');
+  }
+
+  function sysline(t){
+    const d = document.createElement('div');
+    d.className = 'sysline';
+    d.textContent = t;
+    log.appendChild(d); log.scrollTop = log.scrollHeight;
+  }
+  function addBubble(t, me){
+    const d = document.createElement('div');
+    d.className = 'bubble ' + (me ? 'me' : 'them');
+    d.textContent = t;
+    log.appendChild(d); log.scrollTop = log.scrollHeight;
+  }
+  function addImageBubble(blob, filename, me){
+    const url = URL.createObjectURL(blob);
+    const wrap = document.createElement('div');
+    wrap.className = 'bubble imgbubble ' + (me ? 'me' : 'them');
+    const img = document.createElement('img');
+    img.src = url; img.alt = filename;
+    const btn = document.createElement('button');
+    btn.className = 'savebtn';
+    btn.type = 'button';
+    btn.textContent = '⬇ Save';
+    btn.onclick = () => {
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    };
+    wrap.appendChild(img); wrap.appendChild(btn);
+    log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+  }
+
+  async function sendMessage(){
+    const m = msgInput.value.trim();
+    if (!m || !conn || !conn.open) return;
+    const enc = await encrypt(m, pin);
+    conn.send({ type:'text', msg: enc, encrypted:true });
+    addBubble(m, true);
+    msgInput.value = '';
+  }
+  sendBtn.onclick = sendMessage;
+  msgInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); });
+
+  fileInput.onchange = () => {
+    const f = fileInput.files[0];
+    if (!f || !conn || !conn.open) return;
+    const r = new FileReader();
+    r.onload = async () => {
+      const frame = await encryptBytes(new Uint8Array(r.result), pin);
+      conn.send({ type:'file', name:f.name, mime:f.type, data:frame.buffer, encrypted:true });
+      if ((f.type || '').startsWith('image/')) addImageBubble(f, f.name, true);
+      else sysline('Sent file: ' + f.name);
+    };
+    r.readAsArrayBuffer(f);
+    fileInput.value = '';
+  };
+
+  async function receiveFile(fd){
+    let bytes = fd.encrypted ? await decryptBytes(new Uint8Array(fd.data), pin) : fd.data;
+    const blob = new Blob([bytes], { type: fd.mime || 'application/octet-stream' });
+    if ((fd.mime || '').startsWith('image/')){
+      addImageBubble(blob, fd.name, false);
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fd.name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      sysline('Received file, saved as: ' + fd.name);
+    }
+  }
+
+  endBtn.onclick = () => {
+    stopHeartbeat();
+    if (conn) try{ conn.close(); }catch(e){}
+    if (peer) try{ peer.destroy(); }catch(e){}
+    conn = null; peer = null; pin = ''; retried = false; disconnected = false;
+    pinField.value = '';
+    log.innerHTML = '';
+    banner.classList.remove('show');
+    msgInput.disabled = false; sendBtn.disabled = false; fileInput.disabled = false;
+    chatView.classList.remove('active');
+    setupView.classList.remove('hidden');
+    connectBtn.disabled = false;
+    setBeacon('searching');
+    setStatus('Ready when you are.', 'busy');
+  };
+
+  // ---- same AES-GCM passphrase encryption as before, PIN doubles as the key ----
+  async function deriveKey(p, salt, usage){
+    const e = new TextEncoder();
+    const km = await crypto.subtle.importKey('raw', e.encode(p), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name:'PBKDF2', salt, iterations:100000, hash:'SHA-256' },
+      km, { name:'AES-GCM', length:256 }, false, [usage]
+    );
+  }
+  async function encrypt(text, p){
+    const e = new TextEncoder();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(p, salt, 'encrypt');
+    const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, e.encode(text));
+    const out = new Uint8Array(salt.length + iv.length + ct.byteLength);
+    out.set(salt, 0); out.set(iv, salt.length); out.set(new Uint8Array(ct), salt.length + iv.length);
+    return btoa(String.fromCharCode(...out));
+  }
+  async function decrypt(b64, p){
+    const c = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0));
+    const salt = c.slice(0,16), iv = c.slice(16,28), data = c.slice(28);
+    const key = await deriveKey(p, salt, 'decrypt');
+    const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, data);
+    return new TextDecoder().decode(pt);
+  }
+
+  // ---- same scheme, applied to raw bytes, used for files/photos ----
+  async function encryptBytes(bytes, p){
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(p, salt, 'encrypt');
+    const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, bytes);
+    const out = new Uint8Array(salt.length + iv.length + ct.byteLength);
+    out.set(salt, 0); out.set(iv, salt.length); out.set(new Uint8Array(ct), salt.length + iv.length);
+    return out;
+  }
+  async function decryptBytes(frame, p){
+    const salt = frame.slice(0,16), iv = frame.slice(16,28), data = frame.slice(28);
+    const key = await deriveKey(p, salt, 'decrypt');
+    const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, data);
+    return new Uint8Array(pt);
+  }
+})();
+</script>
+</body>
+</html>
